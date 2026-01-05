@@ -1,0 +1,22 @@
+# 환경 변수 (중요! API 키 노출 방지)
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# 운영체제
+.DS_Store
+Thumbs.db

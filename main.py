@@ -1,0 +1,346 @@
+import os
+import logging
+import re
+import json
+from dotenv import load_dotenv
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
+from notion_client import Client
+import openai
+
+# 환경 변수 로드
+load_dotenv()
+
+# 로깅 설정
+logging.basicConfig(
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    level=logging.INFO
+)
+logger = logging.getLogger(__name__)
+
+# API 설정
+TELEGRAM_TOKEN = os.getenv('TELEGRAM_BOT_TOKEN')
+OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
+NOTION_API_KEY = os.getenv('NOTION_API_KEY')
+NOTION_DB_ID = os.getenv('NOTION_DATABASE_ID')
+
+# Notion 클라이언트
+notion = Client(auth=NOTION_API_KEY)
+
+# OpenAI API 키
+openai.api_key = OPENAI_API_KEY
+
+
+def analyze_event(text: str) -> dict:
+    """OpenAI로 이벤트 메시지 분석"""
+    prompt = f"""다음은 크립토/블록체인 이벤트 메시지입니다.
+
+<메시지>
+{text}
+</메시지>
+
+이벤트 정보를 정확히 추출하여 JSON으로만 응답하세요:
+
+{{
+  "event_title": "이벤트 제목 (프로젝트명 + 핵심 내용, 예: PlayKami 신년맞이 이벤트)",
+  "project_name": "프로젝트명만 (예: PlayKami, Rootstock)",
+  "total_prize": "총 상금이 명시되어 있으면 기입, 없으면 '총 상금 통일'",
+  "prize_per_round": "회차별/등수별 상금 상세 (예: 1등 30000 $CROSS, 2등 15000 $CROSS)",
+  "start_date": "YYYY-MM-DD",
+  "duration_days": 이벤트 진행 일수
+}}
+
+규칙:
+1. event_title: 매력적이고 명확한 제목 생성
+2. project_name: 프로젝트명만 간단히
+3. total_prize: 
+   - 전체 상금이 명시되어 있으면 작성 (예: 5천만원, 총 150000 $CROSS)
+   - 회차별로만 나뉘어 있고 전체 합계가 없으면 "총 상금 통일"
+4. prize_per_round: 각 회차/등수별 상금을 자세히
+5. start_date: YYYY-MM-DD (현재 2026년 1월)
+6. duration_days: 시작일~종료일 일수
+7. JSON만 출력
+
+JSON:"""
+
+    try:
+        response = openai.ChatCompletion.create(
+            model="gpt-4o-mini",
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.3,
+            max_tokens=800
+        )
+        
+        result = response.choices[0].message['content'].strip()
+        
+        if '```json' in result:
+            result = result.split('```json')[1].split('```')[0]
+        elif '```' in result:
+            result = result.split('```')[1].split('```')[0]
+        
+        parsed = json.loads(result.strip())
+        logger.info(f"✅ AI 분석: {parsed}")
+        return parsed
+    
+    except Exception as e:
+        logger.error(f"❌ AI 분석 실패: {e}")
+        return {
+            "event_title": "분석 실패",
+            "project_name": "미확인",
+            "total_prize": "N/A",
+            "prize_per_round": "N/A",
+            "start_date": None,
+            "duration_days": None
+        }
+
+
+def check_duplicate(url: str, project_name: str, start_date: str) -> bool:
+    """Notion에서 중복 이벤트 확인"""
+    try:
+        logger.info(f"🔍 중복 확인 시작...")
+        
+        # Notion 데이터베이스 쿼리
+        results = notion.databases.query(
+            database_id=NOTION_DB_ID,
+            page_size=100  # 최근 100개 확인
+        )
+        
+        for page in results.get('results', []):
+            properties = page.get('properties', {})
+            
+            # 원본 링크 확인
+            if '원본 링크' in properties:
+                existing_url = properties['원본 링크'].get('url')
+                if existing_url and url and existing_url == url:
+                    logger.warning(f"⚠️ 중복 감지: 동일한 원본 링크 - {url}")
+                    return True
+            
+            # 프로젝트명 + 시작일 확인
+            if project_name and start_date:
+                # 프로젝트명 추출
+                existing_project = None
+                if '프로젝트명' in properties:
+                    project_rich = properties['프로젝트명'].get('rich_text', [])
+                    if project_rich and len(project_rich) > 0:
+                        existing_project = project_rich[0].get('text', {}).get('content', '')
+                
+                # 시작일 추출
+                existing_date = None
+                if '이벤트 시작일' in properties:
+                    date_obj = properties['이벤트 시작일'].get('date')
+                    if date_obj:
+                        existing_date = date_obj.get('start')
+                
+                # 비교
+                if existing_project and existing_date:
+                    if existing_project == project_name and existing_date == start_date:
+                        logger.warning(f"⚠️ 중복 감지: {project_name} - {start_date}")
+                        return True
+        
+        logger.info("✅ 중복 없음 - 신규 이벤트")
+        return False
+    
+    except Exception as e:
+        logger.error(f"❌ 중복 확인 실패: {e}")
+        # 에러 발생 시 중복 아닌 것으로 처리 (저장 허용)
+        return False
+
+
+def save_to_notion(url: str, data: dict) -> bool:
+    """Notion 데이터베이스에 저장"""
+    try:
+        # 필수: 이벤트 제목 (Title)
+        properties = {
+            "이벤트 제목": {
+                "title": [{"text": {"content": str(data.get("event_title", "미확인"))[:100]}}]
+            }
+        }
+        
+        logger.info(f"1️⃣ 이벤트 제목: {data.get('event_title')}")
+        
+        # 프로젝트명
+        project = str(data.get("project_name", "")).strip()
+        if project and project not in ["N/A", "None", ""]:
+            properties["프로젝트명"] = {
+                "rich_text": [{"text": {"content": project[:100]}}]
+            }
+            logger.info(f"2️⃣ 프로젝트명: {project}")
+        
+        # 원본 링크
+        if url and url not in ["URL 없음", "개인 메시지 (링크 없음)", "비공개 채널"]:
+            if url.startswith("http"):
+                properties["원본 링크"] = {"url": url[:2000]}
+                logger.info(f"3️⃣ 원본 링크: {url[:50]}")
+        
+        # 총 상금 (조건부)
+        total_prize = str(data.get("total_prize", "")).strip()
+        if total_prize and total_prize not in ["N/A", "None", "", "총 상금 통일"]:
+            properties["총 상금"] = {
+                "rich_text": [{"text": {"content": total_prize[:2000]}}]
+            }
+            logger.info(f"4️⃣ 총 상금: {total_prize[:50]}")
+        elif total_prize == "총 상금 통일":
+            properties["총 상금"] = {
+                "rich_text": [{"text": {"content": "총 상금 통일"}}]
+            }
+            logger.info(f"4️⃣ 총 상금: 통일")
+        
+        # 회차별 상금
+        per_round = str(data.get("prize_per_round", "")).strip()
+        if per_round and per_round not in ["N/A", "None", ""]:
+            properties["회차별 상금"] = {
+                "rich_text": [{"text": {"content": per_round[:2000]}}]
+            }
+            logger.info(f"5️⃣ 회차별 상금: {per_round[:50]}")
+        
+        # 이벤트 시작일
+        start_date = data.get("start_date")
+        if start_date:
+            start_str = str(start_date).strip()
+            if start_str and start_str not in ["None", "null", "N/A", ""]:
+                properties["이벤트 시작일"] = {
+                    "date": {"start": start_str}
+                }
+                logger.info(f"6️⃣ 이벤트 시작일: {start_str}")
+        
+        # 이벤트 진행 기간
+        duration = data.get("duration_days")
+        if duration is not None:
+            try:
+                duration_num = int(duration) if duration else None
+                if duration_num:
+                    properties["이벤트 진행 기간"] = {"number": duration_num}
+                    logger.info(f"7️⃣ 이벤트 진행 기간: {duration_num}일")
+            except (ValueError, TypeError):
+                logger.warning(f"⚠️ 진행 기간 변환 실패: {duration}")
+        
+        # Notion 저장
+        result = notion.pages.create(
+            parent={"database_id": NOTION_DB_ID},
+            properties=properties
+        )
+        
+        logger.info(f"✅ Notion 저장 성공: {result['id']}")
+        return True
+    
+    except Exception as e:
+        logger.error(f"❌ Notion 저장 실패: {e}")
+        import traceback
+        logger.error(f"상세:\n{traceback.format_exc()}")
+        return False
+
+
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """텔레그램 메시지 처리"""
+    message = update.message
+    
+    # 포워딩 확인
+    is_forwarded = message.forward_origin is not None
+    
+    if is_forwarded:
+        logger.info("📬 포워딩 메시지")
+        origin = message.forward_origin
+        
+        # 원본 링크
+        url = None
+        if hasattr(origin, 'chat') and hasattr(origin.chat, 'username'):
+            chat_username = origin.chat.username
+            message_id = origin.message_id
+            url = f"https://t.me/{chat_username}/{message_id}"
+            logger.info(f"🔗 {url}")
+        else:
+            url = "비공개 채널"
+        
+        text = message.text or message.caption or ""
+        if message.photo:
+            text += "\n[이미지 포함]"
+        
+    else:
+        logger.info("💬 일반 메시지")
+        text = message.text or message.caption or ""
+        urls = re.findall(r'https?://[^\s]+', text)
+        url = urls[0] if urls else "URL 없음"
+    
+    processing = await message.reply_text("🔄 분석 중...")
+    
+    # AI 분석
+    result = analyze_event(text)
+    
+    # 중복 확인
+    is_duplicate = check_duplicate(
+        url=url if url not in ["URL 없음", "비공개 채널"] else None,
+        project_name=result.get("project_name"),
+        start_date=result.get("start_date")
+    )
+    
+    if is_duplicate:
+        # 중복 이벤트
+        await processing.edit_text(
+            "⚠️ 사전에 등록 된 이벤트 입니다.\n\n"
+            f"📋 이벤트: {result.get('event_title', 'N/A')}\n"
+            f"🏢 프로젝트: {result.get('project_name', 'N/A')}\n"
+            f"📅 시작일: {result.get('start_date', 'N/A')}"
+        )
+        logger.info("⚠️ 중복 이벤트로 저장하지 않음")
+        return
+    
+    # Notion 저장
+    success = save_to_notion(url, result)
+    
+    # 결과
+    if success:
+        duration = f"{result.get('duration_days', 'N/A')}일" if result.get('duration_days') else 'N/A'
+        total_info = result.get('total_prize', 'N/A')
+        
+        response_text = (
+            f"✅ 분석 완료!\n\n"
+            f"📋 이벤트: {result.get('event_title', 'N/A')}\n"
+            f"🏢 프로젝트: {result.get('project_name', 'N/A')}\n"
+            f"💰 총 상금: {total_info}\n"
+            f"🎁 회차별: {result.get('prize_per_round', 'N/A')[:60]}...\n"
+            f"📅 시작: {result.get('start_date', 'N/A')}\n"
+            f"⏱️ 기간: {duration}\n"
+            f"💵 가치: 수동 입력 필요"
+        )
+        if url and url not in ["URL 없음", "비공개 채널"]:
+            response_text += f"\n🔗 {url}"
+    else:
+        response_text = "❌ 저장 실패"
+    
+    await processing.edit_text(response_text)
+
+
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """시작"""
+    await update.message.reply_text(
+        "🤖 이벤트 분석 봇 v2.3\n\n"
+        "📤 채널 게시물을 포워딩하세요!\n"
+        "🤖 AI가 자동 분석\n"
+        "📊 Notion에 저장\n\n"
+        "✨ 주요 기능:\n"
+        "- 이벤트 제목 자동 생성\n"
+        "- 총 상금 조건부 표시\n"
+        "- 회차별 상금 상세 분석\n"
+        "- 중복 이벤트 확인 🆕\n"
+        "- 상금 가치는 수동 입력"
+    )
+
+
+def main():
+    """실행"""
+    if not all([TELEGRAM_TOKEN, NOTION_DB_ID, OPENAI_API_KEY]):
+        logger.error("❌ 환경 변수 누락")
+        return
+    
+    app = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    app.add_handler(MessageHandler(filters.FORWARDED, handle_message))
+    
+    logger.info("🚀 봇 시작 v2.3 (중복 확인 기능)")
+    app.run_polling()
+
+
+if __name__ == '__main__':
+    main()
