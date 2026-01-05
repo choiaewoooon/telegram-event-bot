@@ -45,19 +45,21 @@ def analyze_event(text: str) -> dict:
   "total_prize": "총 상금이 명시되어 있으면 기입, 없으면 '총 상금 통일'",
   "prize_per_round": "회차별/등수별 상금 상세 (예: 1등 30000 $CROSS, 2등 15000 $CROSS)",
   "start_date": "YYYY-MM-DD",
-  "duration_days": 이벤트 진행 일수
+  "duration_days": 이벤트 진행 일수,
+  "mission_content": "유저가 수행해야 할 미션을 간단명료하게 정리 (예: 트위터 팔로우, 텔레그램 가입, 댓글 작성)"
 }}
 
 규칙:
 1. event_title: 매력적이고 명확한 제목 생성
 2. project_name: 프로젝트명만 간단히
-3. total_prize: 
+3. total_prize:
    - 전체 상금이 명시되어 있으면 작성 (예: 5천만원, 총 150000 $CROSS)
    - 회차별로만 나뉘어 있고 전체 합계가 없으면 "총 상금 통일"
 4. prize_per_round: 각 회차/등수별 상금을 자세히
 5. start_date: YYYY-MM-DD (현재 2026년 1월)
 6. duration_days: 시작일~종료일 일수
-7. JSON만 출력
+7. mission_content: 유저가 해야 할 행동을 핵심만 간단히 (2-3줄 이내)
+8. JSON만 출력
 
 JSON:"""
 
@@ -92,7 +94,8 @@ JSON:"""
             "total_prize": "N/A",
             "prize_per_round": "N/A",
             "start_date": None,
-            "duration_days": None
+            "duration_days": None,
+            "mission_content": "N/A"
         }
 
 
@@ -201,7 +204,14 @@ def save_to_notion(url: str, data: dict) -> bool:
                     logger.info(f"7️⃣ 이벤트 진행 기간: {duration_num}일")
             except (ValueError, TypeError):
                 logger.warning(f"⚠️ 진행 기간 변환 실패: {duration}")
-        
+
+        mission = str(data.get("mission_content", "")).strip()
+        if mission and mission not in ["N/A", "None", ""]:
+            properties["미션 내용"] = {
+                "rich_text": [{"text": {"content": mission[:2000]}}]
+            }
+            logger.info(f"8️⃣ 미션 내용: {mission[:50]}")
+
         result = notion.pages.create(
             parent={"database_id": NOTION_DB_ID},
             properties=properties
@@ -272,6 +282,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         duration = f"{result.get('duration_days', 'N/A')}일" if result.get('duration_days') else 'N/A'
         total_info = result.get('total_prize', 'N/A')
         
+        mission_text = result.get('mission_content', 'N/A')
+        if len(mission_text) > 80:
+            mission_text = mission_text[:80] + "..."
+
         response_text = (
             f"✅ 분석 완료!\n\n"
             f"📋 이벤트: {result.get('event_title', 'N/A')}\n"
@@ -280,6 +294,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🎁 회차별: {result.get('prize_per_round', 'N/A')[:60]}...\n"
             f"📅 시작: {result.get('start_date', 'N/A')}\n"
             f"⏱️ 기간: {duration}\n"
+            f"🎯 미션: {mission_text}\n"
             f"💵 가치: 수동 입력 필요"
         )
         if url and url not in ["URL 없음", "비공개 채널"]:
