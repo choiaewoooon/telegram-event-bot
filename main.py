@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from telegram import Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from notion_client import Client
-import openai
 
 # 환경 변수 로드
 load_dotenv()
@@ -27,12 +26,11 @@ NOTION_DB_ID = os.getenv('NOTION_DATABASE_ID')
 # Notion 클라이언트
 notion = Client(auth=NOTION_API_KEY)
 
-# OpenAI API 키
-openai.api_key = OPENAI_API_KEY
-
 
 def analyze_event(text: str) -> dict:
     """OpenAI로 이벤트 메시지 분석"""
+    from openai import OpenAI
+    
     prompt = f"""다음은 크립토/블록체인 이벤트 메시지입니다.
 
 <메시지>
@@ -64,14 +62,16 @@ def analyze_event(text: str) -> dict:
 JSON:"""
 
     try:
-        response = openai.ChatCompletion.create(
+        client = OpenAI(api_key=OPENAI_API_KEY)
+        
+        response = client.chat.completions.create(
             model="gpt-4o-mini",
             messages=[{"role": "user", "content": prompt}],
             temperature=0.3,
             max_tokens=800
         )
         
-        result = response.choices[0].message['content'].strip()
+        result = response.choices[0].message.content.strip()
         
         if '```json' in result:
             result = result.split('```json')[1].split('```')[0]
@@ -84,6 +84,8 @@ JSON:"""
     
     except Exception as e:
         logger.error(f"❌ AI 분석 실패: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return {
             "event_title": "분석 실패",
             "project_name": "미확인",
@@ -99,39 +101,33 @@ def check_duplicate(url: str, project_name: str, start_date: str) -> bool:
     try:
         logger.info(f"🔍 중복 확인 시작...")
         
-        # Notion 데이터베이스 쿼리
         results = notion.databases.query(
             database_id=NOTION_DB_ID,
-            page_size=100  # 최근 100개 확인
+            page_size=100
         )
         
         for page in results.get('results', []):
             properties = page.get('properties', {})
             
-            # 원본 링크 확인
             if '원본 링크' in properties:
                 existing_url = properties['원본 링크'].get('url')
                 if existing_url and url and existing_url == url:
                     logger.warning(f"⚠️ 중복 감지: 동일한 원본 링크 - {url}")
                     return True
             
-            # 프로젝트명 + 시작일 확인
             if project_name and start_date:
-                # 프로젝트명 추출
                 existing_project = None
                 if '프로젝트명' in properties:
                     project_rich = properties['프로젝트명'].get('rich_text', [])
                     if project_rich and len(project_rich) > 0:
                         existing_project = project_rich[0].get('text', {}).get('content', '')
                 
-                # 시작일 추출
                 existing_date = None
                 if '이벤트 시작일' in properties:
                     date_obj = properties['이벤트 시작일'].get('date')
                     if date_obj:
                         existing_date = date_obj.get('start')
                 
-                # 비교
                 if existing_project and existing_date:
                     if existing_project == project_name and existing_date == start_date:
                         logger.warning(f"⚠️ 중복 감지: {project_name} - {start_date}")
@@ -142,14 +138,12 @@ def check_duplicate(url: str, project_name: str, start_date: str) -> bool:
     
     except Exception as e:
         logger.error(f"❌ 중복 확인 실패: {e}")
-        # 에러 발생 시 중복 아닌 것으로 처리 (저장 허용)
         return False
 
 
 def save_to_notion(url: str, data: dict) -> bool:
     """Notion 데이터베이스에 저장"""
     try:
-        # 필수: 이벤트 제목 (Title)
         properties = {
             "이벤트 제목": {
                 "title": [{"text": {"content": str(data.get("event_title", "미확인"))[:100]}}]
@@ -158,7 +152,6 @@ def save_to_notion(url: str, data: dict) -> bool:
         
         logger.info(f"1️⃣ 이벤트 제목: {data.get('event_title')}")
         
-        # 프로젝트명
         project = str(data.get("project_name", "")).strip()
         if project and project not in ["N/A", "None", ""]:
             properties["프로젝트명"] = {
@@ -166,13 +159,11 @@ def save_to_notion(url: str, data: dict) -> bool:
             }
             logger.info(f"2️⃣ 프로젝트명: {project}")
         
-        # 원본 링크
         if url and url not in ["URL 없음", "개인 메시지 (링크 없음)", "비공개 채널"]:
             if url.startswith("http"):
                 properties["원본 링크"] = {"url": url[:2000]}
                 logger.info(f"3️⃣ 원본 링크: {url[:50]}")
         
-        # 총 상금 (조건부)
         total_prize = str(data.get("total_prize", "")).strip()
         if total_prize and total_prize not in ["N/A", "None", "", "총 상금 통일"]:
             properties["총 상금"] = {
@@ -185,7 +176,6 @@ def save_to_notion(url: str, data: dict) -> bool:
             }
             logger.info(f"4️⃣ 총 상금: 통일")
         
-        # 회차별 상금
         per_round = str(data.get("prize_per_round", "")).strip()
         if per_round and per_round not in ["N/A", "None", ""]:
             properties["회차별 상금"] = {
@@ -193,7 +183,6 @@ def save_to_notion(url: str, data: dict) -> bool:
             }
             logger.info(f"5️⃣ 회차별 상금: {per_round[:50]}")
         
-        # 이벤트 시작일
         start_date = data.get("start_date")
         if start_date:
             start_str = str(start_date).strip()
@@ -203,7 +192,6 @@ def save_to_notion(url: str, data: dict) -> bool:
                 }
                 logger.info(f"6️⃣ 이벤트 시작일: {start_str}")
         
-        # 이벤트 진행 기간
         duration = data.get("duration_days")
         if duration is not None:
             try:
@@ -214,7 +202,6 @@ def save_to_notion(url: str, data: dict) -> bool:
             except (ValueError, TypeError):
                 logger.warning(f"⚠️ 진행 기간 변환 실패: {duration}")
         
-        # Notion 저장
         result = notion.pages.create(
             parent={"database_id": NOTION_DB_ID},
             properties=properties
@@ -234,14 +221,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """텔레그램 메시지 처리"""
     message = update.message
     
-    # 포워딩 확인
     is_forwarded = message.forward_origin is not None
     
     if is_forwarded:
         logger.info("📬 포워딩 메시지")
         origin = message.forward_origin
         
-        # 원본 링크
         url = None
         if hasattr(origin, 'chat') and hasattr(origin.chat, 'username'):
             chat_username = origin.chat.username
@@ -263,10 +248,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     processing = await message.reply_text("🔄 분석 중...")
     
-    # AI 분석
     result = analyze_event(text)
     
-    # 중복 확인
     is_duplicate = check_duplicate(
         url=url if url not in ["URL 없음", "비공개 채널"] else None,
         project_name=result.get("project_name"),
@@ -274,7 +257,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     if is_duplicate:
-        # 중복 이벤트
         await processing.edit_text(
             "⚠️ 사전에 등록 된 이벤트 입니다.\n\n"
             f"📋 이벤트: {result.get('event_title', 'N/A')}\n"
@@ -284,10 +266,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.info("⚠️ 중복 이벤트로 저장하지 않음")
         return
     
-    # Notion 저장
     success = save_to_notion(url, result)
     
-    # 결과
     if success:
         duration = f"{result.get('duration_days', 'N/A')}일" if result.get('duration_days') else 'N/A'
         total_info = result.get('total_prize', 'N/A')
@@ -313,7 +293,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """시작"""
     await update.message.reply_text(
-        "🤖 이벤트 분석 봇 v2.3\n\n"
+        "🤖 이벤트 분석 봇 v3.0 (최신 OpenAI)\n\n"
         "📤 채널 게시물을 포워딩하세요!\n"
         "🤖 AI가 자동 분석\n"
         "📊 Notion에 저장\n\n"
@@ -321,7 +301,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "- 이벤트 제목 자동 생성\n"
         "- 총 상금 조건부 표시\n"
         "- 회차별 상금 상세 분석\n"
-        "- 중복 이벤트 확인 🆕\n"
+        "- 중복 이벤트 확인\n"
         "- 상금 가치는 수동 입력"
     )
 
@@ -338,7 +318,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.FORWARDED, handle_message))
     
-    logger.info("🚀 봇 시작 v2.3 (중복 확인 기능)")
+    logger.info("🚀 봇 시작 v3.0 (최신 OpenAI)")
     app.run_polling()
 
 
