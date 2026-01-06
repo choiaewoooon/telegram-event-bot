@@ -239,16 +239,42 @@ def save_to_notion(url: str, data: dict) -> bool:
         return False
 
 
+async def process_single_event(text: str, url: str) -> dict:
+    """단일 이벤트 처리"""
+    result = analyze_event(text)
+
+    is_duplicate = check_duplicate(
+        url=url if url not in ["URL 없음", "비공개 채널"] else None,
+        project_name=result.get("project_name"),
+        start_date=result.get("start_date")
+    )
+
+    if is_duplicate:
+        return {
+            "status": "duplicate",
+            "result": result,
+            "url": url
+        }
+
+    success = save_to_notion(url, result)
+
+    return {
+        "status": "success" if success else "error",
+        "result": result,
+        "url": url
+    }
+
+
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """텔레그램 메시지 처리"""
     message = update.message
-    
+
     is_forwarded = message.forward_origin is not None
-    
+
     if is_forwarded:
         logger.info("📬 포워딩 메시지")
         origin = message.forward_origin
-        
+
         url = None
         if hasattr(origin, 'chat') and hasattr(origin.chat, 'username'):
             chat_username = origin.chat.username
@@ -257,65 +283,104 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.info(f"🔗 {url}")
         else:
             url = "비공개 채널"
-        
+
         text = message.text or message.caption or ""
         if message.photo:
             text += "\n[이미지 포함]"
-        
+
+        # 포워딩 메시지는 단일 이벤트로 처리
+        processing = await message.reply_text("🔄 분석 중...")
+
+        process_result = await process_single_event(text, url)
+
+        if process_result["status"] == "duplicate":
+            result = process_result["result"]
+            await processing.edit_text(
+                "⚠️ 사전에 등록 된 이벤트 입니다.\n\n"
+                f"📋 이벤트: {result.get('event_title', 'N/A')}\n"
+                f"🏢 프로젝트: {result.get('project_name', 'N/A')}\n"
+                f"📅 시작일: {result.get('start_date', 'N/A')}"
+            )
+            logger.info("⚠️ 중복 이벤트로 저장하지 않음")
+            return
+
+        result = process_result["result"]
+        if process_result["status"] == "success":
+            duration = f"{result.get('duration_days', 'N/A')}일" if result.get('duration_days') else 'N/A'
+            total_info = result.get('total_prize', 'N/A')
+
+            mission_text = result.get('mission_content', 'N/A')
+            if len(mission_text) > 80:
+                mission_text = mission_text[:80] + "..."
+
+            response_text = (
+                f"✅ 분석 완료!\n\n"
+                f"📋 이벤트: {result.get('event_title', 'N/A')}\n"
+                f"🏢 프로젝트: {result.get('project_name', 'N/A')}\n"
+                f"💰 총 상금: {total_info}\n"
+                f"🎁 회차별: {result.get('prize_per_round', 'N/A')[:60]}...\n"
+                f"📅 시작: {result.get('start_date', 'N/A')}\n"
+                f"🏁 종료: {result.get('end_date', 'N/A')}\n"
+                f"⏱️ 기간: {duration}\n"
+                f"🎯 미션: {mission_text}\n"
+                f"💵 가치: 수동 입력 필요"
+            )
+            if url and url not in ["URL 없음", "비공개 채널"]:
+                response_text += f"\n🔗 {url}"
+        else:
+            response_text = "❌ 저장 실패"
+
+        await processing.edit_text(response_text)
+
     else:
+        # 일반 메시지: 여러 링크 처리 가능
         logger.info("💬 일반 메시지")
         text = message.text or message.caption or ""
-        urls = re.findall(r'https?://[^\s]+', text)
-        url = urls[0] if urls else "URL 없음"
-    
-    processing = await message.reply_text("🔄 분석 중...")
-    
-    result = analyze_event(text)
-    
-    is_duplicate = check_duplicate(
-        url=url if url not in ["URL 없음", "비공개 채널"] else None,
-        project_name=result.get("project_name"),
-        start_date=result.get("start_date")
-    )
-    
-    if is_duplicate:
-        await processing.edit_text(
-            "⚠️ 사전에 등록 된 이벤트 입니다.\n\n"
-            f"📋 이벤트: {result.get('event_title', 'N/A')}\n"
-            f"🏢 프로젝트: {result.get('project_name', 'N/A')}\n"
-            f"📅 시작일: {result.get('start_date', 'N/A')}"
-        )
-        logger.info("⚠️ 중복 이벤트로 저장하지 않음")
-        return
-    
-    success = save_to_notion(url, result)
-    
-    if success:
-        duration = f"{result.get('duration_days', 'N/A')}일" if result.get('duration_days') else 'N/A'
-        total_info = result.get('total_prize', 'N/A')
-        
-        mission_text = result.get('mission_content', 'N/A')
-        if len(mission_text) > 80:
-            mission_text = mission_text[:80] + "..."
 
-        response_text = (
-            f"✅ 분석 완료!\n\n"
-            f"📋 이벤트: {result.get('event_title', 'N/A')}\n"
-            f"🏢 프로젝트: {result.get('project_name', 'N/A')}\n"
-            f"💰 총 상금: {total_info}\n"
-            f"🎁 회차별: {result.get('prize_per_round', 'N/A')[:60]}...\n"
-            f"📅 시작: {result.get('start_date', 'N/A')}\n"
-            f"🏁 종료: {result.get('end_date', 'N/A')}\n"
-            f"⏱️ 기간: {duration}\n"
-            f"🎯 미션: {mission_text}\n"
-            f"💵 가치: 수동 입력 필요"
-        )
-        if url and url not in ["URL 없음", "비공개 채널"]:
-            response_text += f"\n🔗 {url}"
-    else:
-        response_text = "❌ 저장 실패"
-    
-    await processing.edit_text(response_text)
+        # 줄바꿈으로 구분된 링크들 추출
+        lines = text.strip().split('\n')
+        urls = []
+        for line in lines:
+            line_urls = re.findall(r'https?://[^\s]+', line.strip())
+            if line_urls:
+                urls.extend(line_urls)
+
+        if not urls:
+            # 링크가 없으면 전체 텍스트를 하나의 이벤트로 처리
+            urls = ["URL 없음"]
+
+        processing = await message.reply_text(f"🔄 {len(urls)}개 이벤트 분석 중...")
+
+        # 각 링크마다 처리
+        results = []
+        for idx, url in enumerate(urls, 1):
+            logger.info(f"📌 [{idx}/{len(urls)}] 처리 중: {url[:50] if url != 'URL 없음' else 'URL 없음'}")
+            process_result = await process_single_event(text, url, message)
+            results.append(process_result)
+
+        # 결과 요약
+        success_count = sum(1 for r in results if r["status"] == "success")
+        duplicate_count = sum(1 for r in results if r["status"] == "duplicate")
+        error_count = sum(1 for r in results if r["status"] == "error")
+
+        response_lines = [f"📊 처리 완료 ({len(urls)}개)"]
+        response_lines.append(f"✅ 저장: {success_count}개")
+        if duplicate_count > 0:
+            response_lines.append(f"⚠️ 중복: {duplicate_count}개")
+        if error_count > 0:
+            response_lines.append(f"❌ 실패: {error_count}개")
+
+        response_lines.append("")
+
+        # 각 결과 상세
+        for idx, process_result in enumerate(results, 1):
+            result = process_result["result"]
+            status_emoji = "✅" if process_result["status"] == "success" else "⚠️" if process_result["status"] == "duplicate" else "❌"
+            response_lines.append(
+                f"{status_emoji} [{idx}] {result.get('event_title', 'N/A')[:30]}"
+            )
+
+        await processing.edit_text("\n".join(response_lines))
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -346,7 +411,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.FORWARDED, handle_message))
     
-    logger.info("🚀 봇 시작 v3.0 (최신 OpenAI)")
+    logger.info("🚀 봇 시작 v3.1 (다수 링크 저장)")
     app.run_polling()
 
 
