@@ -49,4 +49,13 @@ python main.py
 4. "회차별 상금"(Text)
 5. "상금 가치"(Number)
 6. "이벤트 시작일"(date)
-7. "이벤트 진행 기간"(date)
+7. "이벤트 종료일"(date)
+8. "이벤트 진행 기간"(Number)
+9. "미션 내용"(Text)
+10. "장소"(Select: 온라인, 오프라인)
+11. "원본 링크"(URL)
+
+## 나머지 .py 자료의 목적
+
+1. update_end_dates.py : 기존 자료에 종료일 일괄 적용
+2. update_locations.py : 기존 자료에 온/오프라인 여부 일괄 적용
