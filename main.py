@@ -47,7 +47,8 @@ def analyze_event(text: str) -> dict:
   "start_date": "YYYY-MM-DD",
   "end_date": "YYYY-MM-DD",
   "duration_days": 이벤트 진행 일수,
-  "mission_content": "유저가 수행해야 할 미션을 간단명료하게 정리 (예: 트위터 팔로우, 텔레그램 가입, 댓글 작성)"
+  "mission_content": "유저가 수행해야 할 미션을 간단명료하게 정리 (예: 트위터 팔로우, 텔레그램 가입, 댓글 작성)",
+  "location": "온라인 또는 오프라인 (오프라인 장소 언급이 있으면 '오프라인', 없으면 '온라인')"
 }}
 
 규칙:
@@ -61,7 +62,8 @@ def analyze_event(text: str) -> dict:
 6. end_date: YYYY-MM-DD (시작일 + 진행일수로 계산)
 7. duration_days: 시작일~종료일 일수
 8. mission_content: 유저가 해야 할 행동을 핵심만 간단히 (2-3줄 이내)
-9. JSON만 출력
+9. location: "온라인" 또는 "오프라인" (특정 오프라인 장소/주소 언급 시 "오프라인", 그 외 "온라인")
+10. JSON만 출력
 
 JSON:"""
 
@@ -98,7 +100,8 @@ JSON:"""
             "start_date": None,
             "end_date": None,
             "duration_days": None,
-            "mission_content": "N/A"
+            "mission_content": "N/A",
+            "location": "온라인"
         }
 
 
@@ -224,6 +227,13 @@ def save_to_notion(url: str, data: dict) -> bool:
             }
             logger.info(f"9️⃣ 미션 내용: {mission[:50]}")
 
+        location = str(data.get("location", "온라인")).strip()
+        if location in ["온라인", "오프라인"]:
+            properties["장소"] = {
+                "select": {"name": location}
+            }
+            logger.info(f"🔟 장소: {location}")
+
         result = notion.pages.create(
             parent={"database_id": NOTION_DB_ID},
             properties=properties
@@ -298,6 +308,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(mission_text) > 80:
             mission_text = mission_text[:80] + "..."
 
+        location_emoji = "🌐" if result.get('location') == "온라인" else "📍"
+
         response_text = (
             f"✅ 분석 완료!\n\n"
             f"📋 이벤트: {result.get('event_title', 'N/A')}\n"
@@ -307,6 +319,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"📅 시작: {result.get('start_date', 'N/A')}\n"
             f"🏁 종료: {result.get('end_date', 'N/A')}\n"
             f"⏱️ 기간: {duration}\n"
+            f"{location_emoji} 장소: {result.get('location', '온라인')}\n"
             f"🎯 미션: {mission_text}\n"
             f"💵 가치: 수동 입력 필요"
         )
@@ -321,13 +334,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """시작"""
     await update.message.reply_text(
-        "🤖 이벤트 분석 봇 v3.0\n\n"
+        "🤖 이벤트 분석 봇 v3.1\n\n"
         "📤 채널 게시물을 포워딩하거나 링크를 보내세요!\n"
         "🤖 AI가 자동 분석\n"
         "📊 Notion에 저장\n\n"
         "✨ 주요 기능:\n"
         "- 이벤트 제목/미션 자동 생성\n"
         "- 시작일/종료일 자동 계산\n"
+        "- 온라인/오프라인 장소 구분\n"
         "- 총 상금 조건부 표시\n"
         "- 회차별 상금 상세 분석\n"
         "- 중복 이벤트 확인\n"
@@ -347,7 +361,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.FORWARDED, handle_message))
     
-    logger.info("🚀 봇 시작 v3.0 (미션/종료일 추가)")
+    logger.info("🚀 봇 시작 v3.1 (장소 구분 추가)")
     app.run_polling()
 
 
