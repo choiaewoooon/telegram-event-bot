@@ -355,7 +355,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         results = []
         for idx, url in enumerate(urls, 1):
             logger.info(f"📌 [{idx}/{len(urls)}] 처리 중: {url[:50] if url != 'URL 없음' else 'URL 없음'}")
-            process_result = await process_single_event(text, url)
+            process_result = await process_single_event(text, url, message)
             results.append(process_result)
 
         # 결과 요약
