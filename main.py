@@ -45,6 +45,7 @@ def analyze_event(text: str) -> dict:
   "total_prize": "총 상금이 명시되어 있으면 기입, 없으면 '총 상금 통일'",
   "prize_per_round": "회차별/등수별 상금 상세 (예: 1등 30000 $CROSS, 2등 15000 $CROSS)",
   "start_date": "YYYY-MM-DD",
+  "end_date": "YYYY-MM-DD",
   "duration_days": 이벤트 진행 일수,
   "mission_content": "유저가 수행해야 할 미션을 간단명료하게 정리 (예: 트위터 팔로우, 텔레그램 가입, 댓글 작성)"
 }}
@@ -57,9 +58,10 @@ def analyze_event(text: str) -> dict:
    - 회차별로만 나뉘어 있고 전체 합계가 없으면 "총 상금 통일"
 4. prize_per_round: 각 회차/등수별 상금을 자세히
 5. start_date: YYYY-MM-DD (현재 2026년 1월)
-6. duration_days: 시작일~종료일 일수
-7. mission_content: 유저가 해야 할 행동을 핵심만 간단히 (2-3줄 이내)
-8. JSON만 출력
+6. end_date: YYYY-MM-DD (시작일 + 진행일수로 계산)
+7. duration_days: 시작일~종료일 일수
+8. mission_content: 유저가 해야 할 행동을 핵심만 간단히 (2-3줄 이내)
+9. JSON만 출력
 
 JSON:"""
 
@@ -94,6 +96,7 @@ JSON:"""
             "total_prize": "N/A",
             "prize_per_round": "N/A",
             "start_date": None,
+            "end_date": None,
             "duration_days": None,
             "mission_content": "N/A"
         }
@@ -194,14 +197,23 @@ def save_to_notion(url: str, data: dict) -> bool:
                     "date": {"start": start_str}
                 }
                 logger.info(f"6️⃣ 이벤트 시작일: {start_str}")
-        
+
+        end_date = data.get("end_date")
+        if end_date:
+            end_str = str(end_date).strip()
+            if end_str and end_str not in ["None", "null", "N/A", ""]:
+                properties["이벤트 종료일"] = {
+                    "date": {"start": end_str}
+                }
+                logger.info(f"7️⃣ 이벤트 종료일: {end_str}")
+
         duration = data.get("duration_days")
         if duration is not None:
             try:
                 duration_num = int(duration) if duration else None
                 if duration_num:
                     properties["이벤트 진행 기간"] = {"number": duration_num}
-                    logger.info(f"7️⃣ 이벤트 진행 기간: {duration_num}일")
+                    logger.info(f"8️⃣ 이벤트 진행 기간: {duration_num}일")
             except (ValueError, TypeError):
                 logger.warning(f"⚠️ 진행 기간 변환 실패: {duration}")
 
@@ -210,7 +222,7 @@ def save_to_notion(url: str, data: dict) -> bool:
             properties["미션 내용"] = {
                 "rich_text": [{"text": {"content": mission[:2000]}}]
             }
-            logger.info(f"8️⃣ 미션 내용: {mission[:50]}")
+            logger.info(f"9️⃣ 미션 내용: {mission[:50]}")
 
         result = notion.pages.create(
             parent={"database_id": NOTION_DB_ID},
@@ -293,6 +305,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"💰 총 상금: {total_info}\n"
             f"🎁 회차별: {result.get('prize_per_round', 'N/A')[:60]}...\n"
             f"📅 시작: {result.get('start_date', 'N/A')}\n"
+            f"🏁 종료: {result.get('end_date', 'N/A')}\n"
             f"⏱️ 기간: {duration}\n"
             f"🎯 미션: {mission_text}\n"
             f"💵 가치: 수동 입력 필요"
