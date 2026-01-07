@@ -24,3 +24,11 @@ Thumbs.db
 # 유틸리티 스크립트 (Git에 올리지 않음)
 fill_missing_missions.py
 shorten_missions.py
+check_kodiak_mission.py
+
+# 모든 유틸리티 스크립트 제외 (main.py 제외)
+*_mission*.py
+check_*.py
+test_*.py
+debug_*.py
+analyze_*.py
