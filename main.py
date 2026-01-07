@@ -364,7 +364,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.FORWARDED, handle_message))
     
-    logger.info("🚀 봇 시작 v3.2 (날짜 통합)")
+    logger.info("🚀 봇 시작 v3.3 (미션 간결화)")
     app.run_polling()
 
 
