@@ -193,22 +193,25 @@ def save_to_notion(url: str, data: dict) -> bool:
             logger.info(f"5️⃣ 회차별 상금: {per_round[:50]}")
         
         start_date = data.get("start_date")
+        end_date = data.get("end_date")
+
         if start_date:
             start_str = str(start_date).strip()
             if start_str and start_str not in ["None", "null", "N/A", ""]:
-                properties["이벤트 시작일"] = {
-                    "date": {"start": start_str}
-                }
-                logger.info(f"6️⃣ 이벤트 시작일: {start_str}")
+                date_property = {"start": start_str}
 
-        end_date = data.get("end_date")
-        if end_date:
-            end_str = str(end_date).strip()
-            if end_str and end_str not in ["None", "null", "N/A", ""]:
-                properties["이벤트 종료일"] = {
-                    "date": {"start": end_str}
-                }
-                logger.info(f"7️⃣ 이벤트 종료일: {end_str}")
+                # 종료일이 있으면 함께 설정
+                if end_date:
+                    end_str = str(end_date).strip()
+                    if end_str and end_str not in ["None", "null", "N/A", ""]:
+                        date_property["end"] = end_str
+                        logger.info(f"6️⃣ 이벤트 기간: {start_str} → {end_str}")
+                    else:
+                        logger.info(f"6️⃣ 이벤트 시작일: {start_str}")
+                else:
+                    logger.info(f"6️⃣ 이벤트 시작일: {start_str}")
+
+                properties["이벤트 시작일"] = {"date": date_property}
 
         duration = data.get("duration_days")
         if duration is not None:
@@ -216,7 +219,7 @@ def save_to_notion(url: str, data: dict) -> bool:
                 duration_num = int(duration) if duration else None
                 if duration_num:
                     properties["이벤트 진행 기간"] = {"number": duration_num}
-                    logger.info(f"8️⃣ 이벤트 진행 기간: {duration_num}일")
+                    logger.info(f"7️⃣ 이벤트 진행 기간: {duration_num}일")
             except (ValueError, TypeError):
                 logger.warning(f"⚠️ 진행 기간 변환 실패: {duration}")
 
@@ -225,14 +228,14 @@ def save_to_notion(url: str, data: dict) -> bool:
             properties["미션 내용"] = {
                 "rich_text": [{"text": {"content": mission[:2000]}}]
             }
-            logger.info(f"9️⃣ 미션 내용: {mission[:50]}")
+            logger.info(f"8️⃣ 미션 내용: {mission[:50]}")
 
         location = str(data.get("location", "온라인")).strip()
         if location in ["온라인", "오프라인"]:
             properties["장소"] = {
                 "select": {"name": location}
             }
-            logger.info(f"🔟 장소: {location}")
+            logger.info(f"9️⃣ 장소: {location}")
 
         result = notion.pages.create(
             parent={"database_id": NOTION_DB_ID},
@@ -334,13 +337,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """시작"""
     await update.message.reply_text(
-        "🤖 이벤트 분석 봇 v3.1\n\n"
+        "🤖 이벤트 분석 봇 v3.2\n\n"
         "📤 채널 게시물을 포워딩하거나 링크를 보내세요!\n"
         "🤖 AI가 자동 분석\n"
         "📊 Notion에 저장\n\n"
         "✨ 주요 기능:\n"
         "- 이벤트 제목/미션 자동 생성\n"
-        "- 시작일/종료일 자동 계산\n"
+        "- 시작일/종료일 자동 계산 (통합 날짜 범위)\n"
         "- 온라인/오프라인 장소 구분\n"
         "- 총 상금 조건부 표시\n"
         "- 회차별 상금 상세 분석\n"
@@ -361,7 +364,7 @@ def main():
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
     app.add_handler(MessageHandler(filters.FORWARDED, handle_message))
     
-    logger.info("🚀 봇 시작 v3.1 (장소 구분 추가)")
+    logger.info("🚀 봇 시작 v3.2 (날짜 통합)")
     app.run_polling()
 
 

@@ -13,7 +13,7 @@ notion = Client(auth=NOTION_API_KEY)
 
 
 def update_end_dates():
-    """기존 Notion 데이터베이스의 모든 항목에 종료일 추가"""
+    """기존 Notion 데이터베이스의 이벤트 시작일을 start/end 통합 형식으로 변환"""
 
     print("🔄 Notion 데이터베이스에서 데이터 가져오는 중...")
 
@@ -38,59 +38,71 @@ def update_end_dates():
             if title_data and len(title_data) > 0:
                 event_title = title_data[0].get('text', {}).get('content', '제목 없음')
 
-        # 이미 종료일이 있는지 확인
-        has_end_date = False
-        if '이벤트 종료일' in properties:
-            end_date_data = properties['이벤트 종료일'].get('date')
-            if end_date_data and end_date_data.get('start'):
-                has_end_date = True
-
-        if has_end_date:
-            print(f"⏭️  [{event_title[:30]}] - 이미 종료일 존재, 건너뜀")
-            skipped_count += 1
-            continue
-
-        # 시작일과 진행 기간 가져오기
+        # 시작일 가져오기
         start_date = None
+        has_end_in_start = False
         if '이벤트 시작일' in properties:
             date_obj = properties['이벤트 시작일'].get('date')
             if date_obj:
                 start_date = date_obj.get('start')
+                # 이미 end가 설정되어 있는지 확인
+                if date_obj.get('end'):
+                    has_end_in_start = True
 
-        duration_days = None
-        if '이벤트 진행 기간' in properties:
-            duration_days = properties['이벤트 진행 기간'].get('number')
+        if has_end_in_start:
+            print(f"⏭️  [{event_title[:30]}] - 이미 종료일 통합됨, 건너뜀")
+            skipped_count += 1
+            continue
 
-        # 종료일 계산
-        if start_date and duration_days:
+        # 종료일 가져오기 (별도 필드에서)
+        end_date = None
+        if '이벤트 종료일' in properties:
+            end_date_obj = properties['이벤트 종료일'].get('date')
+            if end_date_obj:
+                end_date = end_date_obj.get('start')
+
+        # 종료일이 없으면 진행 기간으로 계산
+        if not end_date and start_date:
+            duration_days = None
+            if '이벤트 진행 기간' in properties:
+                duration_days = properties['이벤트 진행 기간'].get('number')
+
+            if duration_days:
+                try:
+                    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+                    end_dt = start_dt + timedelta(days=int(duration_days))
+                    end_date = end_dt.strftime("%Y-%m-%d")
+                except Exception as e:
+                    print(f"⚠️  [{event_title[:30]}] - 종료일 계산 실패: {e}")
+
+        # 이벤트 시작일에 start/end 통합
+        if start_date:
             try:
-                start_dt = datetime.strptime(start_date, "%Y-%m-%d")
-                end_dt = start_dt + timedelta(days=int(duration_days))
-                end_date = end_dt.strftime("%Y-%m-%d")
+                date_property = {"start": start_date}
+
+                if end_date and end_date != start_date:
+                    date_property["end"] = end_date
+                    print(f"✅ [{event_title[:30]}] - 날짜 통합: {start_date} → {end_date}")
+                else:
+                    print(f"✅ [{event_title[:30]}] - 단일 날짜: {start_date}")
 
                 # Notion 업데이트
                 notion.pages.update(
                     page_id=page_id,
                     properties={
-                        "이벤트 종료일": {
-                            "date": {"start": end_date}
+                        "이벤트 시작일": {
+                            "date": date_property
                         }
                     }
                 )
 
-                print(f"✅ [{event_title[:30]}] - 종료일 추가: {end_date}")
                 updated_count += 1
 
             except Exception as e:
                 print(f"❌ [{event_title[:30]}] - 오류: {e}")
                 error_count += 1
         else:
-            missing = []
-            if not start_date:
-                missing.append("시작일")
-            if not duration_days:
-                missing.append("진행 기간")
-            print(f"⚠️  [{event_title[:30]}] - 누락된 데이터: {', '.join(missing)}")
+            print(f"⚠️  [{event_title[:30]}] - 시작일 없음, 건너뜀")
             skipped_count += 1
 
     print(f"\n{'='*60}")
@@ -99,15 +111,23 @@ def update_end_dates():
     print(f"   ⏭️  건너뜀: {skipped_count}개")
     print(f"   ❌ 오류: {error_count}개")
     print(f"{'='*60}")
+    print(f"\n💡 이제 Notion에서 '이벤트 종료일' 열을 삭제해도 됩니다.")
 
 
 if __name__ == '__main__':
     print("="*60)
-    print("🚀 Notion 이벤트 종료일 일괄 업데이트 스크립트")
+    print("🚀 Notion 이벤트 날짜 통합 스크립트 (v3.2)")
     print("="*60)
     print()
+    print("📌 이 스크립트는 다음을 수행합니다:")
+    print("   1. '이벤트 시작일' 필드에 start/end를 통합")
+    print("   2. '이벤트 종료일' 필드의 데이터를 가져와 통합")
+    print("   3. 종료일이 없으면 '진행 기간'으로 자동 계산")
+    print()
+    print("⚠️  실행 후 '이벤트 종료일' 열은 수동으로 삭제하셔야 합니다.")
+    print()
 
-    confirm = input("⚠️  모든 이벤트에 종료일을 추가하시겠습니까? (y/n): ")
+    confirm = input("계속 진행하시겠습니까? (y/n): ")
 
     if confirm.lower() == 'y':
         update_end_dates()
