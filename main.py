@@ -47,7 +47,7 @@ def analyze_event(text: str) -> dict:
   "start_date": "YYYY-MM-DD",
   "end_date": "YYYY-MM-DD",
   "duration_days": 이벤트 진행 일수,
-  "mission_content": "유저가 수행해야 할 미션을 간단명료하게 정리 (예: 트위터 팔로우, 텔레그램 가입, 댓글 작성)",
+  "mission_content": "유저가 수행해야 할 미션을 최대한 간결하게 쉼표로 나열 (예: 트위터 팔로우, 텔레그램 가입, 댓글 작성)",
   "location": "온라인 또는 오프라인 (오프라인 장소 언급이 있으면 '오프라인', 없으면 '온라인')"
 }}
 
@@ -61,7 +61,7 @@ def analyze_event(text: str) -> dict:
 5. start_date: YYYY-MM-DD (현재 2026년 1월)
 6. end_date: YYYY-MM-DD (시작일 + 진행일수로 계산)
 7. duration_days: 시작일~종료일 일수
-8. mission_content: 유저가 해야 할 행동을 핵심만 간단히 (2-3줄 이내)
+8. mission_content: 유저가 해야 할 행동을 핵심 키워드만 쉼표로 나열 (예: 트위터 팔로우, 리트윗, 텔레그램 가입, 댓글 작성) - 설명 문장 없이 행동만 나열
 9. location: "온라인" 또는 "오프라인" (특정 오프라인 장소/주소 언급 시 "오프라인", 그 외 "온라인")
 10. JSON만 출력
 

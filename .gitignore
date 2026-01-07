@@ -20,3 +20,7 @@ ENV/
 # 운영체제
 .DS_Store
 Thumbs.db
+
+# 유틸리티 스크립트 (Git에 올리지 않음)
+fill_missing_missions.py
+shorten_missions.py
